@@ -25,7 +25,7 @@
 - [Testing](#-testing)
 - [Deployment](#-deployment)
 - [Performance](#-performance)
-- [Contributing](#-contributing)
+
 
 ---
 
@@ -112,10 +112,6 @@
 - **Docker & Docker Compose** ([Download](https://www.docker.com/))
 - **Git** ([Download](https://git-scm.com/))
 
-### Optional
-- **IntelliJ IDEA** or any Java IDE
-- **Postman** for API testing ([Download](https://www.postman.com/))
-- **MySQL Workbench** for database management
 
 ---
 
@@ -220,17 +216,7 @@ Key configurations in `src/main/resources/application.properties`:
 # Application will start on http://localhost:8080
 ```
 
-### Method 2: Using JAR (Production)
-
-```bash
-# Build JAR
-./gradlew clean build
-
-# Run JAR
-java -jar build/libs/gamenumber-0.0.1-SNAPSHOT.jar
-```
-
-### Method 3: Using Docker
+### Method 2: Using Docker
 
 ```bash
 # Build Docker image
@@ -678,50 +664,6 @@ docker-compose -f docker-compose.staging.yml up -d
 docker-compose -f docker-compose.prod.yml up -d
 ```
 
-### Cloud Deployment
-
-#### AWS Elastic Beanstalk
-
-```bash
-# Install EB CLI
-pip install awsebcli
-
-# Initialize
-eb init -p docker gamenumber
-
-# Deploy
-eb create gamenumber-prod
-eb deploy
-```
-
-#### Heroku
-
-```bash
-# Login
-heroku login
-
-# Create app
-heroku create gamenumber-prod
-
-# Deploy
-git push heroku main
-
-# Scale
-heroku ps:scale web=2
-```
-
-### Environment Variables (Production)
-
-```bash
-# Set in production
-export JWT_SECRET="production-secret-key-256-bits-minimum"
-export SPRING_DATASOURCE_URL="jdbc:mysql://prod-db:3306/gamenumber"
-export STRIPE_SECRET_KEY="sk_live_your_production_key"
-export APP_BASE_URL="https://api.yourdomain.com"
-export APP_FRONTEND_URL="https://yourdomain.com"
-```
-
----
 
 ## ⚡ Performance
 
@@ -866,26 +808,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-## 👥 Support
-
-- **Documentation:** [Wiki](https://github.com/yourusername/gamenumber/wiki)
-- **Issues:** [GitHub Issues](https://github.com/yourusername/gamenumber/issues)
-- **Email:** support@yourdomain.com
-- **Discord:** [Join our community](https://discord.gg/yourinvite)
-
----
-
-## 🙏 Acknowledgments
-
-- Spring Boot Team for the amazing framework
-- Stripe for payment infrastructure
-- Redis for high-performance caching
-- Community contributors
-
----
-
-**Built with ❤️ by the GameNumber Team**
-
-*Last Updated: October 7, 2025*
-
-# gamenumber_backend
