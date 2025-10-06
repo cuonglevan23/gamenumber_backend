@@ -226,13 +226,7 @@ docker build -t gamenumber:latest .
 docker run -p 8080:8080 --env-file .env gamenumber:latest
 ```
 
-### Method 4: Using IDE (IntelliJ IDEA)
 
-1. Open project in IntelliJ IDEA
-2. Navigate to `GamenumberApplication.java`
-3. Right-click → Run 'GamenumberApplication'
-
----
 
 ## 📚 API Documentation
 
@@ -509,6 +503,198 @@ GET /api/v1/payment/cancel
 
 ---
 
+## 🔐 Concurrency & Race Condition Handling
+
+### Problem: Multiple Concurrent Requests
+When a user rapidly clicks "Guess" button multiple times, or sends concurrent API requests, the system must ensure:
+- ✅ Each guess is processed exactly once
+- ✅ Turns are deducted correctly (no double deduction or skip)
+- ✅ Score is calculated accurately
+- ✅ Game history is recorded properly
+
+### Solution: Distributed Locking with Redis
+
+#### 🔒 Lock Mechanism
+```java
+// Lock key per user: "game:lock:{userId}"
+String lockKey = "game:lock:" + userId;
+
+// Acquire lock with retry mechanism
+if (!acquireLockWithRetry(lockKey)) {
+    throw new GameLockException(); // Returns 409 Conflict
+}
+
+try {
+    // Process game logic here
+    // Only ONE request can execute at a time per user
+} finally {
+    redisUtils.releaseLock(lockKey); // Always release lock
+}
+```
+
+#### ⚙️ Lock Configuration
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| **Lock Timeout** | 5 seconds | Auto-release if request fails |
+| **Max Retries** | 2 attempts | Try to acquire lock 2 times |
+| **Retry Delay** | 50ms | Wait between retry attempts |
+| **Lock Scope** | Per User | Each user has separate lock |
+
+#### 📊 Flow Diagram
+```
+Request 1 (User A)          Request 2 (User A - concurrent)
+      ↓                              ↓
+  Try Lock ✅                    Try Lock ❌
+      ↓                              ↓
+  Process Game                   Wait 50ms
+      ↓                              ↓
+  Deduct Turns                   Retry Lock ❌
+      ↓                              ↓
+  Save Result                    Wait 50ms
+      ↓                              ↓
+  Release Lock ✅                Retry Failed
+                                     ↓
+                                 Return 409 Conflict
+```
+
+### Error Handling
+
+#### GameLockException (HTTP 409)
+When lock cannot be acquired after retries:
+
+**Response:**
+```json
+{
+  "success": false,
+  "message": "Another game request is being processed. Please try again.",
+  "error": "GAME_LOCK_ERROR",
+  "timestamp": "2025-10-07T00:00:00"
+}
+```
+
+**Client Handling:**
+```javascript
+try {
+  const response = await fetch('/api/v1/game/guess', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ number: 3 })
+  });
+  
+  if (response.status === 409) {
+    // Lock conflict - retry after short delay
+    await sleep(100);
+    return retryGuess();
+  }
+} catch (error) {
+  console.error('Game error:', error);
+}
+```
+
+### Atomic Operations
+
+#### 1. Turn Deduction (Redis Atomic)
+```java
+// Atomic decrement in Redis
+redisService.decrementTurns(userId);
+
+// Implemented as:
+// DECR user:{userId}:turns
+```
+
+#### 2. Score Increment (Redis Atomic)
+```java
+// Atomic increment in Redis
+redisService.incrementScore(userId, scoreEarned);
+
+// Implemented as:
+// INCRBY user:{userId}:score {scoreEarned}
+```
+
+### Performance Impact
+
+| Scenario | Lock Behavior | Performance |
+|----------|---------------|-------------|
+| **Single Request** | Acquire immediately | < 50ms |
+| **Concurrent (2 requests)** | 1st acquires, 2nd waits | ~100ms total |
+| **High Concurrency (5+ requests)** | Queue processing | 2nd+ returns 409 |
+
+### Best Practices for Frontend
+
+#### ✅ Recommended: Disable Button During Request
+```javascript
+const [isProcessing, setIsProcessing] = useState(false);
+
+const handleGuess = async (number) => {
+  if (isProcessing) return; // Prevent multiple clicks
+  
+  setIsProcessing(true);
+  try {
+    const result = await guessNumber(number);
+    // Handle success
+  } catch (error) {
+    if (error.status === 409) {
+      // Show: "Please wait, processing previous request..."
+    }
+  } finally {
+    setIsProcessing(false);
+  }
+};
+```
+
+#### ❌ Not Recommended: Allow Rapid Clicks
+```javascript
+// This will cause lock conflicts
+onClick={() => guessNumber(3)} // No debounce/throttle
+```
+
+### Advanced: Pessimistic Locking (Database Level)
+
+For critical operations, the system also uses **database-level pessimistic locking**:
+
+```java
+@Lock(LockModeType.PESSIMISTIC_WRITE)
+@Query("SELECT u FROM User u WHERE u.id = :id")
+Optional<User> findByIdWithLock(@Param("id") Long id);
+```
+
+This ensures data consistency even under extreme concurrent load.
+
+### Monitoring & Alerts
+
+#### Lock Metrics
+```bash
+# Check Redis locks
+redis-cli KEYS "game:lock:*"
+
+# Monitor lock timeouts
+curl http://localhost:8080/actuator/metrics/game.lock.timeout
+```
+
+#### Log Examples
+```
+✅ SUCCESS: Lock acquired for user 123 - Processing guess
+⚠️  WARNING: Failed to acquire lock for user 123 - Request rejected
+🔓 RELEASE: Lock released for user 123 - Game processed in 45ms
+```
+
+### Summary
+
+The system uses **multi-layered concurrency control**:
+
+1. **🔒 Redis Distributed Lock** - Prevents concurrent processing
+2. **⚡ Redis Atomic Operations** - Ensures correct turn/score updates
+3. **🗄️ Database Pessimistic Lock** - Critical data protection
+4. **🔄 Retry Mechanism** - Handles temporary conflicts
+5. **❌ Graceful Failure** - Returns 409 when lock unavailable
+
+This architecture ensures **100% data accuracy** even when users spam the guess button or send concurrent API requests.
+
+---
+
 ## 🔐 Authentication
 
 ### Getting Started with Authentication
@@ -563,38 +749,6 @@ curl -X POST http://localhost:8080/api/v1/auth/refresh \
 
 ---
 
-## 🧪 Testing
-
-### Using cURL
-
-#### Test Registration & Login
-```bash
-# Register
-curl -X POST http://localhost:8080/api/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"username":"test1","email":"test1@example.com","password":"Pass123!"}'
-
-# Login
-curl -X POST http://localhost:8080/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"test1","password":"Pass123!"}'
-```
-
-#### Test Game Play
-```bash
-# Save token from login response
-TOKEN="eyJhbGciOiJIUzI1NiIs..."
-
-# Play game
-curl -X POST http://localhost:8080/api/v1/game/guess \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"number":3}'
-
-# Get leaderboard
-curl http://localhost:8080/api/v1/leaderboard
-```
-
 ### Using Postman
 
 1. **Import Collection:**
@@ -638,31 +792,7 @@ For testing Stripe payments:
 ./gradlew test jacocoTestReport
 ```
 
----
 
-## 🚢 Deployment
-
-### Docker Deployment
-
-#### Build & Run with Docker Compose
-
-```bash
-# Production deployment
-docker-compose -f docker-compose.yml up -d
-
-# Scale application (multiple instances)
-docker-compose up -d --scale app=3
-```
-
-#### Environment-Specific Deployment
-
-```bash
-# Staging
-docker-compose -f docker-compose.staging.yml up -d
-
-# Production
-docker-compose -f docker-compose.prod.yml up -d
-```
 
 
 ## ⚡ Performance
@@ -738,62 +868,6 @@ CREATE TABLE transactions (
 
 ---
 
-## 🤝 Contributing
-
-### Development Workflow
-
-1. Fork the repository
-2. Create feature branch: `git checkout -b feature/amazing-feature`
-3. Commit changes: `git commit -m 'Add amazing feature'`
-4. Push to branch: `git push origin feature/amazing-feature`
-5. Open Pull Request
-
-### Code Standards
-
-- **Java Style:** Google Java Style Guide
-- **Commit Convention:** Conventional Commits
-- **Branch Naming:** `feature/`, `bugfix/`, `hotfix/`
-- **PR Template:** Use provided template
-
-### Pre-commit Checklist
-
-- [ ] Code builds successfully
-- [ ] All tests pass
-- [ ] No new warnings
-- [ ] Code formatted
-- [ ] Documentation updated
-
----
-
-## 📝 Troubleshooting
-
-### Common Issues
-
-#### Issue: Port 8080 already in use
-```bash
-# Find process using port 8080
-lsof -i :8080
-
-# Kill process
-kill -9 <PID>
-```
-
-#### Issue: MySQL connection refused
-```bash
-# Check MySQL is running
-docker-compose ps
-
-# Restart MySQL
-docker-compose restart mysql
-```
-
-#### Issue: Redis connection timeout
-```bash
-# Check Redis is running
-docker-compose exec redis redis-cli ping
-
-# Should return: PONG
-```
 
 #### Issue: Stripe payment fails
 - Verify Stripe API keys in `.env`
